@@ -1,4 +1,5 @@
 name: Build AR Messer APK
+run: gradle assembleDebug --no-daemon --info
 
 on:
   push:
