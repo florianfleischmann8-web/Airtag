@@ -244,6 +244,7 @@ jobs:
           // Hinweis: Dienst/Characteristic für "Ton abspielen" stammen aus der Community (Reverse-Engineering)
           val SVC: UUID = UUID.fromString("7DFC9000-7D1C-4951-86AA-8D9728F8D66C")
           val CHR: UUID = UUID.fromString("7DFC9001-7D1C-4951-86AA-8D9728F8D66C")
+          val DULT: UUID = UUID.fromString("8E0C0001-1D68-FB92-BF61-48377421680E")
           val CYAN = Color(0xFF3DDCFF)
           val VIOLET = Color(0xFF8B5CFF)
 
@@ -338,9 +339,16 @@ jobs:
                           else { if (!finished) say("Verbindung fehlgeschlagen – näher ran gehen und erneut versuchen"); g.close() }
                       }
                       override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-                          val c = g.getService(SVC)?.getCharacteristic(CHR)
-                          if (c == null) { finished = true; say("Dieser Tracker lässt kein Klingeln zu"); g.disconnect(); return }
-                          val cmd = byteArrayOf(0xAF.toByte())
+                          var found: BluetoothGattCharacteristic? = null
+                          var cmd = byteArrayOf(0x00, 0x03) // DULT-Standard: Sound_Start (0x0300)
+                          for (sv in g.services) sv.getCharacteristic(DULT)?.let { found = it }
+                          if (found == null) g.getService(SVC)?.getCharacteristic(CHR)?.let { found = it; cmd = byteArrayOf(0xAF.toByte()) }
+                          val c = found
+                          if (c == null) {
+                              finished = true
+                              say("Kein Klingel-Dienst gefunden. Dienste: " + g.services.joinToString { it.uuid.toString().take(8) })
+                              g.disconnect(); return
+                          }
                           if (Build.VERSION.SDK_INT >= 33) g.writeCharacteristic(c, cmd, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                           else { @Suppress("DEPRECATION") run { c.value = cmd; g.writeCharacteristic(c) } }
                       }
