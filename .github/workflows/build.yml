@@ -1,0 +1,488 @@
+name: Build AirRadar APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Projekt-Dateien erzeugen
+        run: |
+          mkdir -p .
+          cat > settings.gradle.kts <<'EOF_0'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "AirRadar"
+          include(":app")
+          EOF_0
+          mkdir -p .
+          cat > build.gradle.kts <<'EOF_1'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false
+          }
+          EOF_1
+          mkdir -p .
+          cat > gradle.properties <<'EOF_2'
+          org.gradle.jvmargs=-Xmx3g
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF_2
+          mkdir -p app
+          cat > app/build.gradle.kts <<'EOF_3'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+          android {
+              namespace = "com.example.airradar"
+              compileSdk = 35
+              defaultConfig {
+                  applicationId = "com.example.airradar"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+              buildFeatures { compose = true }
+          }
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.09.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.activity:activity-compose:1.9.2")
+              implementation("org.osmdroid:osmdroid-android:6.1.18")
+          }
+          EOF_3
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+              <application
+                  android:allowBackup="true"
+                  android:label="AirRadar"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:theme="@style/Theme.AirRadar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_4
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/themes.xml <<'EOF_5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.AirRadar" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowBackground">@android:color/black</item>
+              </style>
+          </resources>
+          EOF_5
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF_6'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_bg" />
+              <foreground android:drawable="@drawable/ic_fg" />
+          </adaptive-icon>
+          EOF_6
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_bg.xml <<'EOF_7'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:aapt="http://schemas.android.com/aapt"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:pathData="M0,0h108v108h-108z">
+                  <aapt:attr name="android:fillColor">
+                      <gradient android:type="linear" android:startX="0" android:startY="0" android:endX="108" android:endY="108">
+                          <item android:offset="0" android:color="#FF0B1230" />
+                          <item android:offset="0.55" android:color="#FF5B2BE0" />
+                          <item android:offset="1" android:color="#FF18C8FF" />
+                      </gradient>
+                  </aapt:attr>
+              </path>
+              <path android:pathData="M20,30 a22,22 0 1,0 0.01,0z" android:fillColor="#3318C8FF" />
+              <path android:pathData="M92,84 a26,26 0 1,0 0.01,0z" android:fillColor="#33FF4DB8" />
+          </vector>
+          EOF_7
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_fg.xml <<'EOF_8'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:aapt="http://schemas.android.com/aapt"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:pathData="M54,26 a28,28 0 1,0 0.01,0z"
+                  android:strokeColor="#B3FFFFFF" android:strokeWidth="1.5">
+                  <aapt:attr name="android:fillColor">
+                      <gradient android:type="linear" android:startX="30" android:startY="26" android:endX="78" android:endY="82">
+                          <item android:offset="0" android:color="#70FFFFFF" />
+                          <item android:offset="1" android:color="#14FFFFFF" />
+                      </gradient>
+                  </aapt:attr>
+              </path>
+              <path android:pathData="M54,38 a16,16 0 1,0 0.01,0z" android:strokeColor="#99FFFFFF" android:strokeWidth="2" android:fillColor="#00000000" />
+              <path android:pathData="M54,47 a7,7 0 1,0 0.01,0z" android:fillColor="#F2FFFFFF" />
+              <path android:pathData="M36,38 q8,-12 22,-12 q-14,2 -22,12z" android:fillColor="#99FFFFFF" />
+          </vector>
+          EOF_8
+          mkdir -p app/src/main/java/com/example/airradar
+          cat > app/src/main/java/com/example/airradar/MainActivity.kt <<'EOF_9'
+          package com.example.airradar
+
+          import android.Manifest
+          import android.annotation.SuppressLint
+          import android.bluetooth.BluetoothManager
+          import android.bluetooth.le.ScanCallback
+          import android.bluetooth.le.ScanFilter
+          import android.bluetooth.le.ScanResult
+          import android.bluetooth.le.ScanSettings
+          import android.content.Context
+          import android.content.pm.PackageManager
+          import android.graphics.drawable.GradientDrawable
+          import android.location.Location
+          import android.location.LocationListener
+          import android.location.LocationManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import android.view.WindowManager
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.compose.setContent
+          import androidx.activity.enableEdgeToEdge
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.animation.core.*
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.alpha
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.draw.scale
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.toArgb
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.compose.ui.viewinterop.AndroidView
+          import kotlinx.coroutines.delay
+          import org.osmdroid.config.Configuration
+          import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+          import org.osmdroid.util.GeoPoint
+          import org.osmdroid.views.CustomZoomButtonsController
+          import org.osmdroid.views.MapView
+          import org.osmdroid.views.overlay.Marker
+          import org.osmdroid.views.overlay.Polygon
+          import org.osmdroid.views.overlay.TilesOverlay
+          import java.io.File
+          import kotlin.math.max
+          import kotlin.math.pow
+
+          data class Tag(
+              val id: String, val rssi: Float, val maxRssi: Int, val first: Long, val last: Long,
+              val hits: Int, val best: GeoPoint?, val spots: List<GeoPoint>
+          ) {
+              val dist: Double get() = 10.0.pow(((-59 - rssi) / 22f).toDouble())
+              val bars: String get() = when { rssi > -60 -> "▂▄▆█"; rssi > -72 -> "▂▄▆"; rssi > -85 -> "▂▄"; else -> "▂" }
+          }
+
+          class Radar(private val ctx: Context) {
+              val tags = mutableStateMapOf<String, Tag>()
+              var me by mutableStateOf<Location?>(null)
+              var on by mutableStateOf(false)
+              private val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+              private val scanner get() = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter?.bluetoothLeScanner
+              private val locL = LocationListener { me = it }
+              private val cb = object : ScanCallback() {
+                  override fun onScanResult(callbackType: Int, result: ScanResult) = handle(result)
+                  override fun onBatchScanResults(results: MutableList<ScanResult>) { results.forEach { handle(it) } }
+              }
+
+              private fun handle(r: ScanResult) {
+                  val id = r.device.address
+                  val now = System.currentTimeMillis()
+                  val p = me?.let { GeoPoint(it.latitude, it.longitude) }
+                  val old = tags[id]
+                  val rssi = r.rssi
+                  if (old == null) {
+                      tags[id] = Tag(id, rssi.toFloat(), rssi, now, now, 1, p, listOfNotNull(p))
+                  } else {
+                      val best = if (rssi >= old.maxRssi && p != null) p else old.best
+                      val spots = if (p != null && (old.spots.isEmpty() || old.spots.last().distanceToAsDouble(p) > 100)) old.spots + p else old.spots
+                      tags[id] = old.copy(rssi = old.rssi * 0.7f + rssi * 0.3f, maxRssi = max(old.maxRssi, rssi), last = now, hits = old.hits + 1, best = best, spots = spots)
+                  }
+              }
+
+              @SuppressLint("MissingPermission")
+              fun start() {
+                  val s = scanner ?: return
+                  // Apple (0x004C) Find-My "Offline Finding"-Paket: Typ 0x12, Länge 0x19
+                  val f = ScanFilter.Builder().setManufacturerData(0x004C, byteArrayOf(0x12, 0x19), byteArrayOf(-1, -1)).build()
+                  s.startScan(listOf(f), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb)
+                  for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                      if (lm.isProviderEnabled(p)) {
+                          lm.requestLocationUpdates(p, 1000L, 1f, locL)
+                          lm.getLastKnownLocation(p)?.let { if (me == null) me = it }
+                      }
+                  }
+                  on = true
+              }
+
+              @SuppressLint("MissingPermission")
+              fun stop() {
+                  try { scanner?.stopScan(cb) } catch (_: Exception) {}
+                  lm.removeUpdates(locL)
+                  on = false
+              }
+          }
+
+          class MainActivity : ComponentActivity() {
+              private lateinit var radar: Radar
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  enableEdgeToEdge()
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  Configuration.getInstance().apply {
+                      userAgentValue = packageName
+                      osmdroidBasePath = File(cacheDir, "osm")
+                      osmdroidTileCache = File(cacheDir, "osm/tiles")
+                  }
+                  radar = Radar(this)
+                  setContent { App(radar) }
+              }
+              override fun onDestroy() { radar.stop(); super.onDestroy() }
+          }
+
+          val PERMS: Array<String> = if (Build.VERSION.SDK_INT >= 31)
+              arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
+          else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
+          fun hasPerms(c: Context) = PERMS.all { c.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
+          fun colorFor(t: Tag) = when { t.dist < 2 -> Color(0xFFFF4D6D); t.dist < 6 -> Color(0xFFFFB347); else -> Color(0xFF3DDCFF) }
+
+          fun Modifier.glass(r: Dp = 28.dp): Modifier {
+              val shape = RoundedCornerShape(r)
+              return this.clip(shape)
+                  .background(Color(0xFF0B1020).copy(alpha = 0.50f))
+                  .background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.05f))))
+                  .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.75f), Color.White.copy(alpha = 0.06f), Color.White.copy(alpha = 0.35f))), shape)
+          }
+
+          fun dot(map: MapView, p: GeoPoint, color: Int, size: Int, onClick: () -> Unit) = Marker(map).apply {
+              position = p
+              setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+              icon = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color); setStroke(5, android.graphics.Color.WHITE); setSize(size, size) }
+              setOnMarkerClickListener { _, _ -> onClick(); true }
+          }
+
+          @Composable
+          fun GlassBtn(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+              Box(modifier.glass(20.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
+                  Text(label, color = Color.White, fontWeight = FontWeight.SemiBold)
+              }
+          }
+
+          @Composable
+          fun TagRow(t: Tag, now: Long, onClick: () -> Unit) {
+              val age = (now - t.last) / 1000
+              Row(
+                  Modifier.fillMaxWidth().alpha(if (age > 60) 0.45f else 1f).glass(20.dp).clickable(onClick = onClick).padding(14.dp),
+                  verticalAlignment = Alignment.CenterVertically
+              ) {
+                  Text("🏷️", fontSize = 26.sp)
+                  Spacer(Modifier.width(12.dp))
+                  Column(Modifier.weight(1f)) {
+                      Text("AirTag-Signal  ${t.bars}", color = Color.White, fontWeight = FontWeight.SemiBold)
+                      Text("vor ${age}s · ${t.hits}× gesehen" + if (t.spots.size >= 3) " · ⚠️ folgt dir" else "", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                  }
+                  Text("~%.1f m".format(t.dist), color = colorFor(t), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+              }
+          }
+
+          @Composable
+          fun Finder(t: Tag, onBack: () -> Unit, onMap: () -> Unit) {
+              val hint = when { t.dist < 1.5 -> "🔥 Direkt neben dir"; t.dist < 4 -> "♨️ Warm"; t.dist < 10 -> "🌤 Kühl"; else -> "❄️ Weit weg" }
+              Column(Modifier.fillMaxWidth().glass().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text("Finder-Modus · Handy vibriert schneller, je näher", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                  Text("~%.1f m".format(t.dist), color = colorFor(t), fontSize = 54.sp, fontWeight = FontWeight.Bold)
+                  Text(hint, color = Color.White, fontSize = 18.sp)
+                  Spacer(Modifier.height(12.dp))
+                  Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color.White.copy(alpha = 0.15f))) {
+                      Box(Modifier.fillMaxWidth(((t.rssi + 100) / 60f).coerceIn(0.03f, 1f)).fillMaxHeight()
+                          .background(Brush.horizontalGradient(listOf(Color(0xFF3DDCFF), Color(0xFF8B5CFF)))))
+                  }
+                  if (t.spots.size >= 3) {
+                      Spacer(Modifier.height(10.dp))
+                      Text("⚠️ Dieser Tracker wurde an ${t.spots.size} verschiedenen Orten gesehen – er könnte dir folgen.", color = Color(0xFFFFB347), fontSize = 13.sp)
+                  }
+                  Spacer(Modifier.height(14.dp))
+                  Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { GlassBtn("← Zurück", onBack); GlassBtn("🗺 Auf Karte", onMap) }
+              }
+          }
+
+          @Composable
+          fun App(radar: Radar) {
+              val ctx = LocalContext.current
+              var granted by remember { mutableStateOf(hasPerms(ctx)) }
+              val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+                  granted = hasPerms(ctx); if (granted) radar.start()
+              }
+              var sel by remember { mutableStateOf<String?>(null) }
+              var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+              var mapRef by remember { mutableStateOf<MapView?>(null) }
+              LaunchedEffect(Unit) {
+                  if (granted) radar.start() else launcher.launch(PERMS)
+                  while (true) { delay(1000); now = System.currentTimeMillis() }
+              }
+              val hasMe = radar.me != null
+              LaunchedEffect(hasMe, mapRef) {
+                  val l = radar.me; val m = mapRef
+                  if (m != null && l != null) m.controller.setCenter(GeoPoint(l.latitude, l.longitude))
+              }
+              LaunchedEffect(sel) {
+                  val id = sel ?: return@LaunchedEffect
+                  val v = ctx.getSystemService(Vibrator::class.java)
+                  radar.tags[id]?.best?.let { mapRef?.controller?.animateTo(it) }
+                  while (true) {
+                      val t = radar.tags[id]
+                      if (t != null && System.currentTimeMillis() - t.last < 5000) {
+                          v?.vibrate(VibrationEffect.createOneShot(40, 255))
+                          delay((200 + t.dist * 250).toLong().coerceAtMost(2000L))
+                      } else delay(500)
+                  }
+              }
+              val pulse by rememberInfiniteTransition(label = "p").animateFloat(0f, 1f, infiniteRepeatable(tween(1600)), label = "a")
+
+              Box(Modifier.fillMaxSize().background(Color.Black)) {
+                  AndroidView(
+                      modifier = Modifier.fillMaxSize(),
+                      factory = { c ->
+                          MapView(c).apply {
+                              setTileSource(TileSourceFactory.MAPNIK)
+                              setMultiTouchControls(true)
+                              zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                              overlayManager.tilesOverlay.setColorFilter(TilesOverlay.INVERT_COLORS)
+                              controller.setZoom(19.0)
+                              mapRef = this
+                          }
+                      },
+                      update = { map ->
+                          val s = sel
+                          val unused = now
+                          map.overlays.clear()
+                          radar.tags.values.forEach { t ->
+                              val p = t.best ?: return@forEach
+                              if (t.id == s) map.overlays.add(Polygon(map).apply {
+                                  points = Polygon.pointsAsCircle(p, t.dist.coerceAtLeast(2.0))
+                                  fillPaint.color = 0x333DDCFF
+                                  outlinePaint.color = 0xAA3DDCFF.toInt()
+                                  outlinePaint.strokeWidth = 3f
+                                  infoWindow = null
+                              })
+                              val col = if (now - t.last > 60000) 0xFF888888.toInt() else colorFor(t).toArgb()
+                              map.overlays.add(dot(map, p, col, 52) { sel = t.id })
+                          }
+                          radar.me?.let { map.overlays.add(dot(map, GeoPoint(it.latitude, it.longitude), 0xFF4D8DFF.toInt(), 44) {}) }
+                          map.invalidate()
+                      }
+                  )
+
+                  Row(
+                      Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp).fillMaxWidth().glass(26.dp).padding(14.dp, 10.dp),
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                          if (radar.on) Box(Modifier.size(36.dp).scale(0.6f + pulse * 0.8f).alpha(1f - pulse).background(Color(0xFF3DDCFF), CircleShape))
+                          Text("📡", fontSize = 22.sp)
+                      }
+                      Spacer(Modifier.width(10.dp))
+                      Column(Modifier.weight(1f)) {
+                          Text("AirRadar", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                          Text(if (radar.on) "Scanne… ${radar.tags.size} Tracker" else "Pausiert", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                      }
+                      GlassBtn("🎯", {
+                          radar.me?.let { mapRef?.controller?.animateTo(GeoPoint(it.latitude, it.longitude)) }
+                      })
+                      Spacer(Modifier.width(6.dp))
+                      GlassBtn("🗑", { radar.tags.clear(); sel = null })
+                      Spacer(Modifier.width(6.dp))
+                      GlassBtn(if (radar.on) "Stopp" else "Start", {
+                          if (radar.on) radar.stop() else if (granted) radar.start() else launcher.launch(PERMS)
+                      })
+                  }
+
+                  Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp).fillMaxWidth().heightIn(max = 360.dp)) {
+                      val cur = sel?.let { radar.tags[it] }
+                      if (cur != null) {
+                          Finder(cur, { sel = null }, { cur.best?.let { mapRef?.controller?.animateTo(it) } })
+                      } else {
+                          val list = radar.tags.values.sortedByDescending { it.rssi }
+                          Column(Modifier.fillMaxWidth().glass().padding(16.dp)) {
+                              Text("In der Nähe (${list.size})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                              Text("Marker = Ort deines Handys beim stärksten Signal", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                              Spacer(Modifier.height(8.dp))
+                              if (list.isEmpty()) Text("Noch nichts gefunden. Geh langsam umher – AirTags senden nur alle paar Sekunden.", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+                              else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  items(list, key = { it.id }) { t -> TagRow(t, now) { sel = t.id } }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF_9
+
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: APK bauen
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AirRadar-APK
+          path: app/build/outputs/apk/debug/*.apk
