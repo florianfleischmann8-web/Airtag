@@ -77,6 +77,7 @@ jobs:
               <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.INTERNET" />
@@ -162,21 +163,25 @@ jobs:
 
           import android.Manifest
           import android.annotation.SuppressLint
-          import android.bluetooth.BluetoothManager
+          import android.bluetooth.*
           import android.bluetooth.le.ScanCallback
           import android.bluetooth.le.ScanFilter
           import android.bluetooth.le.ScanResult
           import android.bluetooth.le.ScanSettings
           import android.content.Context
+          import android.content.Intent
           import android.content.pm.PackageManager
           import android.graphics.drawable.GradientDrawable
+          import android.hardware.GeomagneticField
+          import android.hardware.Sensor
+          import android.hardware.SensorEvent
+          import android.hardware.SensorEventListener
+          import android.hardware.SensorManager
           import android.location.Location
           import android.location.LocationListener
           import android.location.LocationManager
-          import android.os.Build
-          import android.os.Bundle
-          import android.os.VibrationEffect
-          import android.os.Vibrator
+          import android.net.Uri
+          import android.os.*
           import android.view.WindowManager
           import androidx.activity.ComponentActivity
           import androidx.activity.compose.rememberLauncherForActivityResult
@@ -184,56 +189,99 @@ jobs:
           import androidx.activity.enableEdgeToEdge
           import androidx.activity.result.contract.ActivityResultContracts
           import androidx.compose.animation.core.*
-          import androidx.compose.foundation.*
+          import androidx.compose.foundation.Canvas
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
           import androidx.compose.foundation.layout.*
           import androidx.compose.foundation.lazy.LazyColumn
           import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.rememberScrollState
           import androidx.compose.foundation.shape.CircleShape
           import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.verticalScroll
           import androidx.compose.material3.Text
           import androidx.compose.runtime.*
           import androidx.compose.ui.Alignment
           import androidx.compose.ui.Modifier
           import androidx.compose.ui.draw.alpha
           import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.draw.drawBehind
+          import androidx.compose.ui.draw.rotate
           import androidx.compose.ui.draw.scale
+          import androidx.compose.ui.draw.shadow
+          import androidx.compose.ui.geometry.CornerRadius
           import androidx.compose.ui.graphics.Brush
           import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.Path
+          import androidx.compose.ui.graphics.StrokeCap
+          import androidx.compose.ui.graphics.drawscope.Stroke
           import androidx.compose.ui.graphics.toArgb
           import androidx.compose.ui.platform.LocalContext
           import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
           import androidx.compose.ui.unit.Dp
           import androidx.compose.ui.unit.dp
           import androidx.compose.ui.unit.sp
           import androidx.compose.ui.viewinterop.AndroidView
           import kotlinx.coroutines.delay
           import org.osmdroid.config.Configuration
-          import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+          import org.osmdroid.tileprovider.tilesource.ITileSource
+          import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+          import org.osmdroid.tileprovider.tilesource.XYTileSource
           import org.osmdroid.util.GeoPoint
+          import org.osmdroid.util.MapTileIndex
           import org.osmdroid.views.CustomZoomButtonsController
           import org.osmdroid.views.MapView
           import org.osmdroid.views.overlay.Marker
           import org.osmdroid.views.overlay.Polygon
-          import org.osmdroid.views.overlay.TilesOverlay
+          import org.osmdroid.views.overlay.Polyline
           import java.io.File
+          import java.util.UUID
           import kotlin.math.max
           import kotlin.math.pow
 
+          // Hinweis: Dienst/Characteristic für "Ton abspielen" stammen aus der Community (Reverse-Engineering)
+          val SVC: UUID = UUID.fromString("7DFC9000-7D1C-4951-86AA-8D9728F8D66C")
+          val CHR: UUID = UUID.fromString("7DFC9001-7D1C-4951-86AA-8D9728F8D66C")
+          val CYAN = Color(0xFF3DDCFF)
+          val VIOLET = Color(0xFF8B5CFF)
+
           data class Tag(
-              val id: String, val rssi: Float, val maxRssi: Int, val first: Long, val last: Long,
-              val hits: Int, val best: GeoPoint?, val spots: List<GeoPoint>
+              val id: String, val dev: BluetoothDevice, val rssi: Float, val maxRssi: Int, val first: Long, val last: Long,
+              val hits: Int, val best: GeoPoint?, val spots: List<GeoPoint>, val hist: List<Int>
           ) {
               val dist: Double get() = 10.0.pow(((-59 - rssi) / 22f).toDouble())
               val bars: String get() = when { rssi > -60 -> "▂▄▆█"; rssi > -72 -> "▂▄▆"; rssi > -85 -> "▂▄"; else -> "▂" }
+              val name: String get() = "AirTag · " + id.replace(":", "").takeLast(4)
           }
 
           class Radar(private val ctx: Context) {
               val tags = mutableStateMapOf<String, Tag>()
+              val ignored = mutableStateListOf<String>()
               var me by mutableStateOf<Location?>(null)
               var on by mutableStateOf(false)
+              var heading by mutableFloatStateOf(0f)
+              var ringMsg by mutableStateOf("")
+              private val main = Handler(Looper.getMainLooper())
               private val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+              private val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as SensorManager
               private val scanner get() = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter?.bluetoothLeScanner
               private val locL = LocationListener { me = it }
+              private val sl = object : SensorEventListener {
+                  val rm = FloatArray(9); val o = FloatArray(3)
+                  override fun onSensorChanged(e: SensorEvent) {
+                      SensorManager.getRotationMatrixFromVector(rm, e.values)
+                      SensorManager.getOrientation(rm, o)
+                      var az = Math.toDegrees(o[0].toDouble()).toFloat()
+                      me?.let { az += GeomagneticField(it.latitude.toFloat(), it.longitude.toFloat(), it.altitude.toFloat(), System.currentTimeMillis()).declination }
+                      var d = az - heading
+                      while (d > 180) d -= 360
+                      while (d < -180) d += 360
+                      heading = (heading + d * 0.15f + 360f) % 360f
+                  }
+                  override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+              }
               private val cb = object : ScanCallback() {
                   override fun onScanResult(callbackType: Int, result: ScanResult) = handle(result)
                   override fun onBatchScanResults(results: MutableList<ScanResult>) { results.forEach { handle(it) } }
@@ -241,23 +289,24 @@ jobs:
 
               private fun handle(r: ScanResult) {
                   val id = r.device.address
+                  if (id in ignored) return
                   val now = System.currentTimeMillis()
                   val p = me?.let { GeoPoint(it.latitude, it.longitude) }
                   val old = tags[id]
                   val rssi = r.rssi
                   if (old == null) {
-                      tags[id] = Tag(id, rssi.toFloat(), rssi, now, now, 1, p, listOfNotNull(p))
+                      tags[id] = Tag(id, r.device, rssi.toFloat(), rssi, now, now, 1, p, listOfNotNull(p), listOf(rssi))
                   } else {
                       val best = if (rssi >= old.maxRssi && p != null) p else old.best
                       val spots = if (p != null && (old.spots.isEmpty() || old.spots.last().distanceToAsDouble(p) > 100)) old.spots + p else old.spots
-                      tags[id] = old.copy(rssi = old.rssi * 0.7f + rssi * 0.3f, maxRssi = max(old.maxRssi, rssi), last = now, hits = old.hits + 1, best = best, spots = spots)
+                      tags[id] = old.copy(dev = r.device, rssi = old.rssi * 0.7f + rssi * 0.3f, maxRssi = max(old.maxRssi, rssi), last = now,
+                          hits = old.hits + 1, best = best, spots = spots, hist = (old.hist + rssi).takeLast(40))
                   }
               }
 
               @SuppressLint("MissingPermission")
               fun start() {
                   val s = scanner ?: return
-                  // Apple (0x004C) Find-My "Offline Finding"-Paket: Typ 0x12, Länge 0x19
                   val f = ScanFilter.Builder().setManufacturerData(0x004C, byteArrayOf(0x12, 0x19), byteArrayOf(-1, -1)).build()
                   s.startScan(listOf(f), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb)
                   for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
@@ -266,6 +315,7 @@ jobs:
                           lm.getLastKnownLocation(p)?.let { if (me == null) me = it }
                       }
                   }
+                  sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { sm.registerListener(sl, it, SensorManager.SENSOR_DELAY_GAME) }
                   on = true
               }
 
@@ -273,7 +323,33 @@ jobs:
               fun stop() {
                   try { scanner?.stopScan(cb) } catch (_: Exception) {}
                   lm.removeUpdates(locL)
+                  sm.unregisterListener(sl)
                   on = false
+              }
+
+              @SuppressLint("MissingPermission")
+              fun ring(t: Tag) {
+                  ringMsg = "Verbinde…"
+                  var finished = false
+                  fun say(m: String) { main.post { ringMsg = m } }
+                  t.dev.connectGatt(ctx, false, object : BluetoothGattCallback() {
+                      override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+                          if (newState == BluetoothProfile.STATE_CONNECTED) g.discoverServices()
+                          else { if (!finished) say("Verbindung fehlgeschlagen – näher ran gehen und erneut versuchen"); g.close() }
+                      }
+                      override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                          val c = g.getService(SVC)?.getCharacteristic(CHR)
+                          if (c == null) { finished = true; say("Dieser Tracker lässt kein Klingeln zu"); g.disconnect(); return }
+                          val cmd = byteArrayOf(0xAF.toByte())
+                          if (Build.VERSION.SDK_INT >= 33) g.writeCharacteristic(c, cmd, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                          else { @Suppress("DEPRECATION") run { c.value = cmd; g.writeCharacteristic(c) } }
+                      }
+                      override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+                          finished = true
+                          say(if (status == BluetoothGatt.GATT_SUCCESS) "🔔 Klingelt gerade…" else "Befehl abgelehnt (Status $status)")
+                          main.postDelayed({ g.disconnect() }, 8000)
+                      }
+                  }, BluetoothDevice.TRANSPORT_LE)
               }
           }
 
@@ -284,7 +360,7 @@ jobs:
                   enableEdgeToEdge()
                   window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                   Configuration.getInstance().apply {
-                      userAgentValue = packageName
+                      userAgentValue = "AirRadar/1.0 (Android; private use)"
                       osmdroidBasePath = File(cacheDir, "osm")
                       osmdroidTileCache = File(cacheDir, "osm/tiles")
                   }
@@ -295,19 +371,33 @@ jobs:
           }
 
           val PERMS: Array<String> = if (Build.VERSION.SDK_INT >= 31)
-              arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
+              arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.ACCESS_FINE_LOCATION)
           else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
           fun hasPerms(c: Context) = PERMS.all { c.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
 
-          fun colorFor(t: Tag) = when { t.dist < 2 -> Color(0xFFFF4D6D); t.dist < 6 -> Color(0xFFFFB347); else -> Color(0xFF3DDCFF) }
+          fun colorFor(t: Tag) = when { t.dist < 2 -> Color(0xFFFF4D6D); t.dist < 6 -> Color(0xFFFFB347); else -> CYAN }
 
-          fun Modifier.glass(r: Dp = 28.dp): Modifier {
-              val shape = RoundedCornerShape(r)
-              return this.clip(shape)
-                  .background(Color(0xFF0B1020).copy(alpha = 0.50f))
-                  .background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.26f), Color.White.copy(alpha = 0.05f))))
-                  .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.75f), Color.White.copy(alpha = 0.06f), Color.White.copy(alpha = 0.35f))), shape)
+          fun tiles(i: Int): ITileSource = when (i) {
+              0 -> XYTileSource("CartoDark", 0, 20, 256, ".png", arrayOf("https://a.basemaps.cartocdn.com/dark_all/", "https://b.basemaps.cartocdn.com/dark_all/", "https://c.basemaps.cartocdn.com/dark_all/"), "© OpenStreetMap, © CARTO")
+              1 -> XYTileSource("CartoLight", 0, 20, 256, ".png", arrayOf("https://a.basemaps.cartocdn.com/rastertiles/voyager/", "https://b.basemaps.cartocdn.com/rastertiles/voyager/"), "© OpenStreetMap, © CARTO")
+              else -> object : OnlineTileSourceBase("EsriSat", 0, 19, 256, ".jpg", arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/"), "© Esri") {
+                  override fun getTileURLString(pMapTileIndex: Long): String =
+                      baseUrl + MapTileIndex.getZoom(pMapTileIndex) + "/" + MapTileIndex.getY(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex)
+              }
+          }
+
+          fun Modifier.glass(r: Dp = 28.dp, tint: Color = Color(0xFF0B1020)): Modifier {
+              val sh = RoundedCornerShape(r)
+              return this
+                  .shadow(14.dp, sh, ambientColor = Color.Black, spotColor = CYAN)
+                  .clip(sh)
+                  .background(tint.copy(alpha = 0.42f))
+                  .background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.28f), Color.White.copy(alpha = 0.04f), Color.White.copy(alpha = 0.12f))))
+                  .drawBehind {
+                      drawRoundRect(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.30f), Color.Transparent), 0f, size.height * 0.4f), cornerRadius = CornerRadius(r.toPx()))
+                  }
+                  .border(1.2.dp, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.8f), Color.White.copy(alpha = 0.05f), Color.White.copy(alpha = 0.4f))), sh)
           }
 
           fun dot(map: MapView, p: GeoPoint, color: Int, size: Int, onClick: () -> Unit) = Marker(map).apply {
@@ -319,8 +409,27 @@ jobs:
 
           @Composable
           fun GlassBtn(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-              Box(modifier.glass(20.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
-                  Text(label, color = Color.White, fontWeight = FontWeight.SemiBold)
+              Box(modifier.glass(20.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 11.dp), contentAlignment = Alignment.Center) {
+                  Text(label, color = Color.White, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+              }
+          }
+
+          @Composable
+          fun Fab(label: String, onClick: () -> Unit) {
+              Box(Modifier.size(48.dp).glass(24.dp).clickable(onClick = onClick), contentAlignment = Alignment.Center) { Text(label, fontSize = 20.sp) }
+          }
+
+          @Composable
+          fun Spark(h: List<Int>, c: Color) {
+              Canvas(Modifier.fillMaxWidth().height(36.dp)) {
+                  if (h.size < 2) return@Canvas
+                  val p = Path()
+                  h.forEachIndexed { i, v ->
+                      val x = size.width * i / (h.size - 1)
+                      val y = size.height * (1 - ((v + 100) / 60f).coerceIn(0f, 1f))
+                      if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+                  }
+                  drawPath(p, c, style = Stroke(width = 4f, cap = StrokeCap.Round))
               }
           }
 
@@ -328,13 +437,13 @@ jobs:
           fun TagRow(t: Tag, now: Long, onClick: () -> Unit) {
               val age = (now - t.last) / 1000
               Row(
-                  Modifier.fillMaxWidth().alpha(if (age > 60) 0.45f else 1f).glass(20.dp).clickable(onClick = onClick).padding(14.dp),
+                  Modifier.fillMaxWidth().alpha(if (age > 60) 0.45f else 1f).glass(22.dp).clickable(onClick = onClick).padding(14.dp),
                   verticalAlignment = Alignment.CenterVertically
               ) {
                   Text("🏷️", fontSize = 26.sp)
                   Spacer(Modifier.width(12.dp))
                   Column(Modifier.weight(1f)) {
-                      Text("AirTag-Signal  ${t.bars}", color = Color.White, fontWeight = FontWeight.SemiBold)
+                      Text("${t.name}  ${t.bars}", color = Color.White, fontWeight = FontWeight.SemiBold)
                       Text("vor ${age}s · ${t.hits}× gesehen" + if (t.spots.size >= 3) " · ⚠️ folgt dir" else "", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                   }
                   Text("~%.1f m".format(t.dist), color = colorFor(t), fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -342,23 +451,51 @@ jobs:
           }
 
           @Composable
-          fun Finder(t: Tag, onBack: () -> Unit, onMap: () -> Unit) {
+          fun Finder(t: Tag, radar: Radar, onBack: () -> Unit) {
+              val ctx = LocalContext.current
+              val me = radar.me
+              val best = t.best
+              val close = t.dist < 2.5
+              val angle: Float? = if (me != null && best != null)
+                  me.bearingTo(Location("x").apply { latitude = best.latitude; longitude = best.longitude }) - radar.heading else null
               val hint = when { t.dist < 1.5 -> "🔥 Direkt neben dir"; t.dist < 4 -> "♨️ Warm"; t.dist < 10 -> "🌤 Kühl"; else -> "❄️ Weit weg" }
-              Column(Modifier.fillMaxWidth().glass().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                  Text("Finder-Modus · Handy vibriert schneller, je näher", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
-                  Text("~%.1f m".format(t.dist), color = colorFor(t), fontSize = 54.sp, fontWeight = FontWeight.Bold)
-                  Text(hint, color = Color.White, fontSize = 18.sp)
+              val pulse by rememberInfiniteTransition(label = "f").animateFloat(0f, 1f, infiniteRepeatable(tween(1200)), label = "pf")
+              Column(Modifier.fillMaxWidth().glass().verticalScroll(rememberScrollState()).padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text(t.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                  Spacer(Modifier.height(6.dp))
+                  Box(Modifier.size(120.dp), contentAlignment = Alignment.Center) {
+                      if (close || angle == null) {
+                          Box(Modifier.size(100.dp).scale(0.4f + pulse * 0.6f).alpha(1f - pulse).border(3.dp, colorFor(t), CircleShape))
+                          Text("🎯", fontSize = 40.sp)
+                      } else {
+                          Canvas(Modifier.size(110.dp).rotate(angle)) {
+                              val w = size.width
+                              val p = Path().apply { moveTo(w / 2, 0f); lineTo(w * 0.88f, w * 0.85f); lineTo(w / 2, w * 0.64f); lineTo(w * 0.12f, w * 0.85f); close() }
+                              drawPath(p, Brush.verticalGradient(listOf(CYAN, VIOLET)))
+                              drawPath(p, Color.White.copy(alpha = 0.85f), style = Stroke(3f))
+                          }
+                      }
+                  }
+                  Text("~%.1f m".format(t.dist), color = colorFor(t), fontSize = 44.sp, fontWeight = FontWeight.Bold)
+                  Text(hint, color = Color.White, fontSize = 17.sp)
+                  Text(if (close) "Du bist ganz nah – such die Umgebung ab" else "Handy flach halten und dem Pfeil folgen (Ziel = Ort mit stärkstem Signal)",
+                      color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp, textAlign = TextAlign.Center)
+                  Spacer(Modifier.height(8.dp))
+                  Spark(t.hist, colorFor(t))
+                  if (radar.ringMsg.isNotEmpty()) Text(radar.ringMsg, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                  if (t.spots.size >= 3) Text("⚠️ An ${t.spots.size} verschiedenen Orten gesehen – er könnte dir folgen.", color = Color(0xFFFFB347), fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
                   Spacer(Modifier.height(12.dp))
-                  Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color.White.copy(alpha = 0.15f))) {
-                      Box(Modifier.fillMaxWidth(((t.rssi + 100) / 60f).coerceIn(0.03f, 1f)).fillMaxHeight()
-                          .background(Brush.horizontalGradient(listOf(Color(0xFF3DDCFF), Color(0xFF8B5CFF)))))
+                  Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                      GlassBtn("🔔 Klingeln", { radar.ring(t) }, Modifier.weight(1f))
+                      GlassBtn("🧭 Route", {
+                          best?.let { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:${it.latitude},${it.longitude}?q=${it.latitude},${it.longitude}(AirTag)"))) }
+                      }, Modifier.weight(1f))
                   }
-                  if (t.spots.size >= 3) {
-                      Spacer(Modifier.height(10.dp))
-                      Text("⚠️ Dieser Tracker wurde an ${t.spots.size} verschiedenen Orten gesehen – er könnte dir folgen.", color = Color(0xFFFFB347), fontSize = 13.sp)
+                  Spacer(Modifier.height(10.dp))
+                  Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                      GlassBtn("🙈 Ignorieren", { radar.ignored.add(t.id); radar.tags.remove(t.id); onBack() }, Modifier.weight(1f))
+                      GlassBtn("← Zurück", onBack, Modifier.weight(1f))
                   }
-                  Spacer(Modifier.height(14.dp))
-                  Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { GlassBtn("← Zurück", onBack); GlassBtn("🗺 Auf Karte", onMap) }
               }
           }
 
@@ -372,6 +509,7 @@ jobs:
               var sel by remember { mutableStateOf<String?>(null) }
               var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
               var mapRef by remember { mutableStateOf<MapView?>(null) }
+              var style by remember { mutableIntStateOf(0) }
               LaunchedEffect(Unit) {
                   if (granted) radar.start() else launcher.launch(PERMS)
                   while (true) { delay(1000); now = System.currentTimeMillis() }
@@ -381,7 +519,9 @@ jobs:
                   val l = radar.me; val m = mapRef
                   if (m != null && l != null) m.controller.setCenter(GeoPoint(l.latitude, l.longitude))
               }
+              LaunchedEffect(style, mapRef) { mapRef?.let { it.setTileSource(tiles(style)); it.invalidate() } }
               LaunchedEffect(sel) {
+                  radar.ringMsg = ""
                   val id = sel ?: return@LaunchedEffect
                   val v = ctx.getSystemService(Vibrator::class.java)
                   radar.tags[id]?.best?.let { mapRef?.controller?.animateTo(it) }
@@ -394,16 +534,16 @@ jobs:
                   }
               }
               val pulse by rememberInfiniteTransition(label = "p").animateFloat(0f, 1f, infiniteRepeatable(tween(1600)), label = "a")
+              val follower = radar.tags.values.any { it.spots.size >= 3 }
 
               Box(Modifier.fillMaxSize().background(Color.Black)) {
                   AndroidView(
                       modifier = Modifier.fillMaxSize(),
                       factory = { c ->
                           MapView(c).apply {
-                              setTileSource(TileSourceFactory.MAPNIK)
+                              setTileSource(tiles(0))
                               setMultiTouchControls(true)
                               zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-                              overlayManager.tilesOverlay.setColorFilter(TilesOverlay.INVERT_COLORS)
                               controller.setZoom(19.0)
                               mapRef = this
                           }
@@ -414,13 +554,23 @@ jobs:
                           map.overlays.clear()
                           radar.tags.values.forEach { t ->
                               val p = t.best ?: return@forEach
-                              if (t.id == s) map.overlays.add(Polygon(map).apply {
-                                  points = Polygon.pointsAsCircle(p, t.dist.coerceAtLeast(2.0))
-                                  fillPaint.color = 0x333DDCFF
-                                  outlinePaint.color = 0xAA3DDCFF.toInt()
-                                  outlinePaint.strokeWidth = 3f
-                                  infoWindow = null
-                              })
+                              if (t.id == s) {
+                                  map.overlays.add(Polygon(map).apply {
+                                      points = Polygon.pointsAsCircle(p, t.dist.coerceAtLeast(2.0))
+                                      fillPaint.color = 0x333DDCFF
+                                      outlinePaint.color = 0xAA3DDCFF.toInt()
+                                      outlinePaint.strokeWidth = 3f
+                                      infoWindow = null
+                                  })
+                                  radar.me?.let { m ->
+                                      map.overlays.add(Polyline(map).apply {
+                                          setPoints(listOf(GeoPoint(m.latitude, m.longitude), p))
+                                          outlinePaint.color = 0xFF3DDCFF.toInt()
+                                          outlinePaint.strokeWidth = 7f
+                                          infoWindow = null
+                                      })
+                                  }
+                              }
                               val col = if (now - t.last > 60000) 0xFF888888.toInt() else colorFor(t).toArgb()
                               map.overlays.add(dot(map, p, col, 52) { sel = t.id })
                           }
@@ -429,34 +579,38 @@ jobs:
                       }
                   )
 
-                  Row(
-                      Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp).fillMaxWidth().glass(26.dp).padding(14.dp, 10.dp),
-                      verticalAlignment = Alignment.CenterVertically
-                  ) {
-                      Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                          if (radar.on) Box(Modifier.size(36.dp).scale(0.6f + pulse * 0.8f).alpha(1f - pulse).background(Color(0xFF3DDCFF), CircleShape))
-                          Text("📡", fontSize = 22.sp)
+                  Column(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp)) {
+                      Row(Modifier.fillMaxWidth().glass(28.dp).padding(14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                          Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                              if (radar.on) Box(Modifier.size(36.dp).scale(0.6f + pulse * 0.8f).alpha(1f - pulse).background(CYAN, CircleShape))
+                              Text("📡", fontSize = 22.sp)
+                          }
+                          Spacer(Modifier.width(10.dp))
+                          Column(Modifier.weight(1f)) {
+                              Text("AirRadar", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                              Text(if (radar.on) "Scanne… ${radar.tags.size} Tracker" else "Pausiert", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                          }
+                          GlassBtn(if (radar.on) "Stopp" else "Start", {
+                              if (radar.on) radar.stop() else if (granted) radar.start() else launcher.launch(PERMS)
+                          })
                       }
-                      Spacer(Modifier.width(10.dp))
-                      Column(Modifier.weight(1f)) {
-                          Text("AirRadar", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                          Text(if (radar.on) "Scanne… ${radar.tags.size} Tracker" else "Pausiert", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                      if (follower) {
+                          Spacer(Modifier.height(8.dp))
+                          Text("⚠️ Ein Tracker scheint dir zu folgen!", color = Color.White, fontWeight = FontWeight.SemiBold,
+                              modifier = Modifier.fillMaxWidth().glass(20.dp, Color(0xFFB34700)).padding(12.dp), textAlign = TextAlign.Center)
                       }
-                      GlassBtn("🎯", {
-                          radar.me?.let { mapRef?.controller?.animateTo(GeoPoint(it.latitude, it.longitude)) }
-                      })
-                      Spacer(Modifier.width(6.dp))
-                      GlassBtn("🗑", { radar.tags.clear(); sel = null })
-                      Spacer(Modifier.width(6.dp))
-                      GlassBtn(if (radar.on) "Stopp" else "Start", {
-                          if (radar.on) radar.stop() else if (granted) radar.start() else launcher.launch(PERMS)
-                      })
                   }
 
-                  Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp).fillMaxWidth().heightIn(max = 360.dp)) {
+                  Column(Modifier.align(Alignment.CenterEnd).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                      Fab("🎯") { radar.me?.let { mapRef?.controller?.animateTo(GeoPoint(it.latitude, it.longitude)) } }
+                      Fab(listOf("🌑", "☀️", "🛰")[style]) { style = (style + 1) % 3 }
+                      Fab("🗑") { radar.tags.clear(); sel = null }
+                  }
+
+                  Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp).fillMaxWidth().heightIn(max = 470.dp)) {
                       val cur = sel?.let { radar.tags[it] }
                       if (cur != null) {
-                          Finder(cur, { sel = null }, { cur.best?.let { mapRef?.controller?.animateTo(it) } })
+                          Finder(cur, radar) { sel = null }
                       } else {
                           val list = radar.tags.values.sortedByDescending { it.rssi }
                           Column(Modifier.fillMaxWidth().glass().padding(16.dp)) {
@@ -464,7 +618,7 @@ jobs:
                               Text("Marker = Ort deines Handys beim stärksten Signal", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
                               Spacer(Modifier.height(8.dp))
                               if (list.isEmpty()) Text("Noch nichts gefunden. Geh langsam umher – AirTags senden nur alle paar Sekunden.", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
-                              else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                              else LazyColumn(Modifier.heightIn(max = 260.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                   items(list, key = { it.id }) { t -> TagRow(t, now) { sel = t.id } }
                               }
                           }
